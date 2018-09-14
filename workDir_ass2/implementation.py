@@ -131,7 +131,7 @@ def define_graph():
     # last_output = tf.gather(outputs, int(tf.shape(transposed_outputs)[0]) - 1)
     # Option 2:
     last_output = tf.slice(outputs, [0, int(tf.shape(outputs)[1]) - 1, 0], [BATCH_SIZE, 1, EMBEDDING_SIZE])
-    last_output = tf.squeeze(last_output) if BATCH_SIZE > 1 else tf.squeeze(last_output, [1,])
+    last_output = tf.squeeze(last_output, [1,])
 
     # Do last computation for last transpose
     weights = tf.Variable(tf.truncated_normal([hidden_layer_units[-1], 2]))
