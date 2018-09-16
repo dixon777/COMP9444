@@ -85,7 +85,11 @@ def preprocess(review):
 # 14/09/2018 separate into two func and make syntax more compact
 def create_lstmCell(n, dropout_keep_prob):
     cell = tf.nn.rnn_cell.LSTMCell(n, initializer=tf.truncated_normal_initializer(),activation = tf.nn.relu)
-    return cell if dropout_keep_prob>=1 else tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=dropout_keep_prob)
+    # if dropout_keep_prob.input>=1:
+    # return cell
+    # else:
+    return tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=dropout_keep_prob)
+    # return cell if dropout_keep_prob>=1 else tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=dropout_keep_prob)
 
 def create_multiRNNcell(hidden,dropout_keep_prob):
     cells = [create_lstmCell(n, dropout_keep_prob) for n in hidden]
@@ -120,7 +124,7 @@ def define_graph():
     dropout_keep_prob = tf.placeholder_with_default(1.0, shape=(), name='dropout_keep_prob')
 
 
-    multi_cell = define_multi_cell(hidden_layer_units,dropout_keep_prob)
+    multi_cell = create_multiRNNcell(hidden_layer_units,dropout_keep_prob)
     outputs, _ = tf.nn.dynamic_rnn(multi_cell, input_data,dtype=tf.float32)
     # Note: size(outputs) = [BATCH_SIZE, MAX_WORDS_IN_REVIEW, hidden_layer_units[-1]]
 
@@ -130,13 +134,12 @@ def define_graph():
     # transposed_outputs = tf.transpose(outputs,[1,0,2])
     # last_output = tf.gather(outputs, int(tf.shape(transposed_outputs)[0]) - 1)
     # Option 2:
-    last_output = tf.slice(outputs, [0, int(tf.shape(outputs)[1]) - 1, 0], [BATCH_SIZE, 1, EMBEDDING_SIZE])
-    last_output = tf.squeeze(last_output, [1,])
+    last_output = tf.squeeze(tf.slice(outputs, [0, MAX_WORDS_IN_REVIEW-1, 0], [BATCH_SIZE, 1, hidden_layer_units[-1]]), [1,])
 
     # Do last computation for last transpose
-    weights = tf.Variable(tf.truncated_normal([hidden_layer_units[-1], 2]))
-    biases = tf.Variable(tf.random_normal([2]))
-    logits = tf.matmul(last_output, weights) + biases
+    output_weights = tf.Variable(tf.truncated_normal([hidden_layer_units[-1], 2], seed=0))
+    output_biases = tf.Variable(tf.constant(0, dtype=tf.float32, shape=[2,]))
+    logits = tf.matmul(last_output, output_weights) + output_biases
 
     loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels = labels, logits = logits), name="loss")
 
@@ -144,7 +147,7 @@ def define_graph():
 
     # Evaluate model
     pred_op = tf.nn.softmax(logits)
-    Accuracy = get_accuracy_definition(pred_op, labels, name="accuracy")
+    Accuracy = get_accuracy_definition(pred_op, labels)
 
 
 
