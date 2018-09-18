@@ -56,8 +56,6 @@ def load_data(path='./data/train'):
         with open(f, "r") as openf:
             s = openf.read()
             data.append(imp.preprocess(s))  # NOTE: Preprocessing code called here on all reviews
-        # if i == 128*3:
-        #     break
     return data
 
 

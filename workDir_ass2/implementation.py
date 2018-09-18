@@ -1,10 +1,8 @@
 import tensorflow as tf
 import sys, string, re
-
 BATCH_SIZE = 128
 MAX_WORDS_IN_REVIEW = 100  # Maximum length of a review to consider
 EMBEDDING_SIZE = 50  # Dimensions for each word vector
-# num_classes = 2
 
 stop_words = set({'ourselves', 'hers', 'between', 'yourself', 'again',
                   'there', 'about', 'once', 'during', 'out', 'very', 'having',
@@ -26,12 +24,7 @@ stop_words = set({'ourselves', 'hers', 'between', 'yourself', 'again',
 
 other_punctuation = set({"<br />"})
 
-def get_accuracy_definition(preds_op, labels):
-    correct_preds_op = tf.equal(tf.argmax(preds_op, 1), tf.argmax(labels, 1))
-    # the tf.cast sets True to 1.0, and False to 0.0. With N predictions, of
-    # which M are correct, the mean will be M/N, i.e. the accuracy
-    accuracy = tf.reduce_mean(tf.cast(correct_preds_op, tf.float32), name="accuracy")
-    return accuracy
+
 
 # Print original and modified reviews (Forms: string // list of words)
 # for DEBUG
@@ -96,9 +89,6 @@ def create_multiRNNcell(hidden,dropout_keep_prob):
     multiCell = tf.nn.rnn_cell.MultiRNNCell(cells)
     return multiCell
 
-
-
-
 def define_graph():
     """
     Implement your model here. You will need to define placeholders, for the input and labels,
@@ -114,59 +104,37 @@ def define_graph():
     You must return, in the following order, the placeholders/tensors for;
     RETURNS: input, labels, optimizer, accuracy and loss
     """
-    # Hyperparameters definition
-    learning_rate = 0.001   # learning rate
-    hidden_layer_units = [128,128]        # Define hidden layers
 
-    # Input placeholder
+    # Hyperparameters definition
+    learning_rate = 0.1   # learning rate
+    hidden_layer_units = [64,64]        # Define hidden layers
+    lstmUnits = 64
     input_data = tf.placeholder(tf.float32,shape= [BATCH_SIZE,MAX_WORDS_IN_REVIEW,EMBEDDING_SIZE],name='input_data')
     labels = tf.placeholder(tf.float32, shape = [BATCH_SIZE,2],name = 'labels')
-    dropout_keep_prob = tf.placeholder_with_default(1.0, shape=(), name='dropout_keep_prob')
+    dropout_keep_prob = tf.placeholder_with_default(0.75, shape=(), name='dropout_keep_prob')
 
 
-    multi_cell = create_multiRNNcell(hidden_layer_units,dropout_keep_prob)
-    outputs, _ = tf.nn.dynamic_rnn(multi_cell, input_data,dtype=tf.float32)
-    # Note: size(outputs) = [BATCH_SIZE, MAX_WORDS_IN_REVIEW, hidden_layer_units[-1]]
+    lstm_fw_cell = tf.contrib.rnn.LSTMCell(lstmUnits,forget_bias= 1.0, initializer = tf.orthogonal_initializer())
+    lstm_bw_cell = tf.contrib.rnn.LSTMCell(lstmUnits,forget_bias= 1.0, initializer = tf.orthogonal_initializer())
+    lstm_fw_cell = tf.contrib.rnn.DropoutWrapper(cell=lstm_fw_cell, output_keep_prob=dropout_keep_prob)
+    lstm_bw_cell = tf.contrib.rnn.DropoutWrapper(cell=lstm_bw_cell, output_keep_prob=dropout_keep_prob)
+    #outputs,_,_ = tf.contrib.rnn.static_bidirectional_rnn(lstm_fw_cell,lstm_bw_cell, x, dtype = tf.float32)
+        
+    (value_fw,value_bw), _ = tf.nn.bidirectional_dynamic_rnn(cell_fw =lstm_fw_cell, cell_bw =  lstm_bw_cell, dtype = tf.float32, inputs = input_data)
+    # multi_cell = create_multiRNNcell(hidden_layer_units,dropout_keep_prob)
+    # outputs, _ = tf.nn.dynamic_rnn(multi_cell, input_data,dtype=tf.float32)
+    value = tf.concat((value_fw, value_bw),2)
+    last_output = value[:,-1,:]
 
-    # Extract last outputs
-    # Note: size(last_output) = [BATCH_SIZE, hidden_layer_units[-1]]
-    # Option 1:
-    # transposed_outputs = tf.transpose(outputs,[1,0,2])
-    # last_output = tf.gather(outputs, int(tf.shape(transposed_outputs)[0]) - 1)
-    # Option 2:
-    last_output = tf.squeeze(tf.slice(outputs, [0, MAX_WORDS_IN_REVIEW-1, 0], [BATCH_SIZE, 1, hidden_layer_units[-1]]), [1,])
+    prediction = tf.layers.dense(last_output,2)
 
-    # Do last computation for last transpose
-    output_weights = tf.Variable(tf.truncated_normal([hidden_layer_units[-1], 2], seed=0))
-    output_biases = tf.Variable(tf.constant(0, dtype=tf.float32, shape=[2,]))
-    logits = tf.matmul(last_output, output_weights) + output_biases
-
-    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels = labels, logits = logits), name="loss")
-
-    optimizer = tf.train.AdamOptimizer(learning_rate = learning_rate).minimize(loss)
-
-    # Evaluate model
-    pred_op = tf.nn.softmax(logits)
-    Accuracy = get_accuracy_definition(pred_op, labels)
+    # see the accuracy
+    correctPred = tf.equal(tf.argmax(prediction,1), tf.argmax(labels,1))
+    Accuracy = tf.reduce_mean(tf.cast(correctPred, tf.float32), name = 'accuracy')
+    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=labels), name = 'loss')
+    optimizer = tf.train.AdamOptimizer().minimize(loss)
 
 
-
-
-
-
-
-
-
-    # global_step = tf.Variable(0)
-    # #learning_rate = tf.train.exponential_decay(0.2, global_step, 5000, 0.9, staircase=True)
-    # optimizer = tf.train.GradientDescentOptimizer(0.1)
-    # last_elem = trans_rnn[-1]
-    # logits = (tf.matmul(last_elem, W) + b)
-    # # make prediction and calculate the loss
-    # prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
-    # accuracy = tf.reduce_mean(tf.cast(prediction, tf.float32), name="accuracy")
-    # losses = tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels, logits=logits)
-    # loss = tf.reduce_mean(losses, name="loss")
 
 
     return input_data, labels, dropout_keep_prob, optimizer, Accuracy, loss
