@@ -128,7 +128,7 @@ def embedd_data(training_data_text, e_arr, e_dict):
 
 
 def train():
-    def getTrainBatch():
+    def getTrainBatch(training_data_embedded):
         labels = []
         arr = np.zeros([BATCH_SIZE, MAX_WORDS_IN_REVIEW, EMBEDDING_SIZE])
         for i in range(BATCH_SIZE):
@@ -165,7 +165,7 @@ def train():
     writer = tf.summary.FileWriter(logdir, sess.graph)
 
     for i in range(iterations):
-        batch_data, batch_labels = getTrainBatch()
+        batch_data, batch_labels = getTrainBatch(training_data_embedded)
         sess.run(optimizer, {input_data: batch_data, labels: batch_labels,
                              dropout_keep_prob: 0.6})
         if (i % 50 == 0):

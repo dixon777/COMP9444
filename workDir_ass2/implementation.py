@@ -1,10 +1,11 @@
 import tensorflow as tf
 import sys, string, re
+import numpy as np
 
 BATCH_SIZE = 128
 MAX_WORDS_IN_REVIEW = 100  # Maximum length of a review to consider
 EMBEDDING_SIZE = 50  # Dimensions for each word vector
-# num_classes = 2
+NUM_CLASSES = 2
 
 stop_words = set({'ourselves', 'hers', 'between', 'yourself', 'again',
                   'there', 'about', 'once', 'during', 'out', 'very', 'having',
@@ -26,12 +27,7 @@ stop_words = set({'ourselves', 'hers', 'between', 'yourself', 'again',
 
 other_punctuation = set({"<br />"})
 
-def get_accuracy_definition(preds_op, labels):
-    correct_preds_op = tf.equal(tf.argmax(preds_op, 1), tf.argmax(labels, 1))
-    # the tf.cast sets True to 1.0, and False to 0.0. With N predictions, of
-    # which M are correct, the mean will be M/N, i.e. the accuracy
-    accuracy = tf.reduce_mean(tf.cast(correct_preds_op, tf.float32), name="accuracy")
-    return accuracy
+
 
 # Print original and modified reviews (Forms: string // list of words)
 # for DEBUG
@@ -76,33 +72,97 @@ def preprocess(review):
 
     # Remove stop words
     processed_review = [word for word in processed_review if word not in stop_words]
-
-
     return processed_review
 
-# Additional helper functions
-# 08/09/2018 create
-# 14/09/2018 separate into two func and make syntax more compact
-def create_lstmCell(n, dropout_keep_prob):
-    cell = tf.nn.rnn_cell.LSTMCell(n, initializer=tf.truncated_normal_initializer(),activation = tf.nn.relu)
-    # if dropout_keep_prob.input>=1:
-    # return cell
-    # else:
-    return tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=dropout_keep_prob)
-    # return cell if dropout_keep_prob>=1 else tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=dropout_keep_prob)
-
-def create_multiRNNcell(hidden,dropout_keep_prob):
-    cells = [create_lstmCell(n, dropout_keep_prob) for n in hidden]
-    multiCell = tf.nn.rnn_cell.MultiRNNCell(cells)
-    return multiCell
 
 
+
+l_configs = {
+    "safe": {
+        "learning_rate": 0.001
+    }
+
+}
+
+class RNN(object):
+    default_config = {
+        "dtype": tf.float32,
+        "learning_rate": 0.1,
+        "l_hidden_units": np.array([[64,64],
+                                    [64,64]]),
+        "default_dropout_keep_prob": 0.75,
+        "rnn_cell": tf.nn.rnn_cell.LSTMCell,
+        "rnn_cell_intializer": tf.truncated_normal_initializer,
+        "rnn_cell_activation": tf.nn.relu,
+        "rnn_net": tf.nn.bidirectional_dynamic_rnn,
+        "optimizer": tf.train.AdamOptimizer,
+        "dynamic_seq": True
+    }
+
+    def __init__(self, input):
+        for p in self.default_config:
+            setattr(self, p, input.get(p,self.default_config[p]))
+
+    @staticmethod
+    def get_seq_len(m):
+        a = tf.reduce_max(tf.abs(m), 2)
+        one_or_zero = tf.sign(a)
+        length = tf.cast(tf.reduce_sum(one_or_zero, 1), tf.int32)
+        return length
+
+    def create_cell(self, n, dropout_keep_prob):
+        cell = self.rnn_cell(n, initializer=self.rnn_cell_intializer(),activation = self.rnn_cell_activation)
+        return tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=dropout_keep_prob)
+
+
+
+    def create_graph(self, inputs, labels, num_classes, dropout_keep_prob):
+        seq_len = self.get_seq_len(inputs) if self.dynamic_seq else None
+        if self.rnn_net == tf.contrib.rnn.stack_bidirectional_rnn:
+            # self.l_hidden_units = [[fw_units_1, fw_units_2, ...], [bw_units_1, bw_units_2, ...]]
+            l_hidden_units = l_hidden_units if len(np.shape(l_hidden_units)) > 2 else l_hidden_units[0, :]
+            cell_fw = [self.create_cell(n, dropout_keep_prob) for n in self.l_hidden_units[0]]
+            cell_bw = [self.create_cell(n, dropout_keep_prob) for n in self.l_hidden_units[1]]
+            (value_fw,value_bw), _ = self.rnn_net(cell_fw=cell_fw, cell_bw=cell_bw, dtype=self.dtype, inputs=inputs, sequence_length=seq_len)
+            outputs = tf.concat((value_fw, value_bw),2)
+
+        elif self.rnn_net == tf.nn.bidirectional_dynamic_rnn:
+            # self.l_hidden_units = [fw_units, bw_units]
+            hidden = self.l_hidden_units
+            while len(np.shape(hidden)) > 1:
+                hidden = hidden[0]
+
+            cell_fw = self.create_cell(hidden[0], dropout_keep_prob)
+            cell_bw = self.create_cell(hidden[1], dropout_keep_prob)
+            print("AAA")
+            (value_fw,value_bw), _ = self.rnn_net(cell_fw=cell_fw, cell_bw=cell_bw, dtype=self.dtype, inputs=inputs, sequence_length=seq_len)
+            print("AAA")
+            outputs = tf.concat((value_fw, value_bw),2)
+        elif self.rnn_net == tf.nn.dynamic_rnn: # Forward RNN
+            # self.l_hidden_units = [units_1, units_2, ...]
+            hidden = self.l_hidden_units
+            while len(np.shape(hidden)) > 1:
+                hidden = hidden[0]
+
+            cell = create_cell(hidden, dropout_keep_prob) if len(hidden)==0 else tf.nn.rnn_cell.MultiRNNCell([self.create_cell(n, dropout_keep_prob)  for n in hidden])
+            outputs, states = self.rnn_net(cell, dtype =self.dtype, inputs=inputs, sequence_length=seq_len)
+        else:
+            raise AttributeError("\"rnn_net\" is not either, tf.contrib.nn.stack_bidirectional_rnn, tf.nn.bidirectional_dynamic_rnn or tf.nn.dynamic_rnn")
+
+        last_output = outputs[:,-1,:]
+        logits = tf.layers.dense(last_output, num_classes)
+
+        correct_pred = tf.equal(tf.argmax(logits,1), tf.argmax(labels,1))
+        Accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32), name = 'accuracy')
+        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels), name = 'loss')
+        optimizer = self.optimizer().minimize(loss)
+        return optimizer, Accuracy, loss
 
 
 def define_graph():
     """
-    Implement your model here. You will need to define placeholders, for the input and labels,
-    Note that the input is not strings of words, but the strings after the embedding lookup
+    Implement your model here. You will need to define placeholders, for the inputs and labels,
+    Note that the inputs is not strings of words, but the strings after the embedding lookup
     has been applied (i.e. arrays of floats).
 
     In all cases this code will be called by an unaltered runner.py. You should read this
@@ -114,59 +174,20 @@ def define_graph():
     You must return, in the following order, the placeholders/tensors for;
     RETURNS: input, labels, optimizer, accuracy and loss
     """
-    # Hyperparameters definition
-    learning_rate = 0.001   # learning rate
-    hidden_layer_units = [128,128]        # Define hidden layers
+    # Select configurations
+    config = l_configs["safe"]
 
-    # Input placeholder
-    input_data = tf.placeholder(tf.float32,shape= [BATCH_SIZE,MAX_WORDS_IN_REVIEW,EMBEDDING_SIZE],name='input_data')
-    labels = tf.placeholder(tf.float32, shape = [BATCH_SIZE,2],name = 'labels')
-    dropout_keep_prob = tf.placeholder_with_default(1.0, shape=(), name='dropout_keep_prob')
+    # Define placeholders
+    input_data = tf.placeholder(tf.float32,shape=[BATCH_SIZE,MAX_WORDS_IN_REVIEW,EMBEDDING_SIZE],name='input_data')
+    labels = tf.placeholder(tf.float32, shape = [BATCH_SIZE,NUM_CLASSES],name = 'labels')
+    dropout_keep_prob = tf.placeholder_with_default(0.75, shape=(), name='dropout_keep_prob')
 
-
-    multi_cell = create_multiRNNcell(hidden_layer_units,dropout_keep_prob)
-    outputs, _ = tf.nn.dynamic_rnn(multi_cell, input_data,dtype=tf.float32)
-    # Note: size(outputs) = [BATCH_SIZE, MAX_WORDS_IN_REVIEW, hidden_layer_units[-1]]
-
-    # Extract last outputs
-    # Note: size(last_output) = [BATCH_SIZE, hidden_layer_units[-1]]
-    # Option 1:
-    # transposed_outputs = tf.transpose(outputs,[1,0,2])
-    # last_output = tf.gather(outputs, int(tf.shape(transposed_outputs)[0]) - 1)
-    # Option 2:
-    last_output = tf.squeeze(tf.slice(outputs, [0, MAX_WORDS_IN_REVIEW-1, 0], [BATCH_SIZE, 1, hidden_layer_units[-1]]), [1,])
-
-    # Do last computation for last transpose
-    output_weights = tf.Variable(tf.truncated_normal([hidden_layer_units[-1], 2], seed=0))
-    output_biases = tf.Variable(tf.constant(0, dtype=tf.float32, shape=[2,]))
-    logits = tf.matmul(last_output, output_weights) + output_biases
-
-    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels = labels, logits = logits), name="loss")
-
-    optimizer = tf.train.AdamOptimizer(learning_rate = learning_rate).minimize(loss)
-
-    # Evaluate model
-    pred_op = tf.nn.softmax(logits)
-    Accuracy = get_accuracy_definition(pred_op, labels)
-
-
-
-
-
-
-
-
-
-    # global_step = tf.Variable(0)
-    # #learning_rate = tf.train.exponential_decay(0.2, global_step, 5000, 0.9, staircase=True)
-    # optimizer = tf.train.GradientDescentOptimizer(0.1)
-    # last_elem = trans_rnn[-1]
-    # logits = (tf.matmul(last_elem, W) + b)
-    # # make prediction and calculate the loss
-    # prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
-    # accuracy = tf.reduce_mean(tf.cast(prediction, tf.float32), name="accuracy")
-    # losses = tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels, logits=logits)
-    # loss = tf.reduce_mean(losses, name="loss")
-
-
+    # Obtain results
+    rnn = RNN(config)
+    optimizer, Accuracy, loss = rnn.create_graph(input_data, labels, NUM_CLASSES, dropout_keep_prob)
     return input_data, labels, dropout_keep_prob, optimizer, Accuracy, loss
+
+if __name__ == "__main__":
+    a = define_graph()
+    for i in a:
+        print(type(i))
