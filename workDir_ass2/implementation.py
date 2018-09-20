@@ -3,7 +3,7 @@ import sys, string, re
 import numpy as np
 
 BATCH_SIZE = 128
-MAX_WORDS_IN_REVIEW = 100  # Maximum length of a review to consider
+MAX_WORDS_IN_REVIEW = 150  # Maximum length of a review to consider
 EMBEDDING_SIZE = 50  # Dimensions for each word vector
 NUM_CLASSES = 2
 
@@ -60,12 +60,12 @@ def preprocess(review):
 
     # Strip punctions. Replace them with " " for future splitting
     for punc in other_punctuation:
-      processed_review = processed_review.replace(punc, " ")
+        processed_review = processed_review.replace(punc, " ")
 
     # Remove necessary punctuation
     # !!Reserve words containing '-' char, such as "f-ing"
     for punc in string.punctuation.replace('-',''):
-      processed_review = processed_review.replace(punc, " ")
+        processed_review = processed_review.replace(punc, " ")
 
     # Split sentence by " "
     processed_review = processed_review.split()
@@ -178,16 +178,49 @@ l_configs = {
         "optimizer": tf.train.AdamOptimizer,
         "dynamic_seq": False
     },
-
+    # v 0.8463 (2000)
+    # v 0.8380 (3000)
+    # v 0.810  (4000)
     "trial1": {
         "hidden_units": [[128,128]],
         "extra_dense_activation": tf.nn.sigmoid,
     },
-
-    # validate acc: 0.81875 (ite:8000)
+    # v 0.8406 (1600)
+    # v 0.819 (2400)
+    # v 0.8344 (3400)
+    # v 0.8188 (4300)
+    "trial2": {
+        "hidden_units": [[128,128]],
+        "extra_dense_units": [[128,]],
+        "extra_dense_activation": tf.nn.sigmoid,
+    },
+    # v 0.8406 (1500)
+    # v 0.8276 (2500)
+    # v 0.8198 (4000)
+    # v 0.8271 (6000)
+    "trial3": {
+        "hidden_units": [[64]],
+        "extra_dense_units": [[128,]],
+        "extra_dense_activation": tf.nn.sigmoid,
+        "learning_rate": 0.001,
+    },
+    # v 0.816 (10000)
+    "trial4": {
+        "hidden_units": [[64]],
+        "extra_dense_units": [[128, ]],
+        "extra_dense_activation": tf.nn.relu,
+    },
+    #
+    "trial5": {
+        "hidden_units": [[64,]],
+        "extra_dense_units": [[128, ]],
+        "extra_dense_activation": tf.nn.relu,
+    },
+    # v 0.81875 (8000)
     "ensemble1": {
         "hidden_units": [[128],[64,64]],
         "extra_dense_units": [[32,]],
+        "extra_dense_weights_initializer": tf.random_normal_initializer
     },
     "ensemble2": {
         "hidden_units": [[128,128],[64,100], [100]],
@@ -198,8 +231,6 @@ l_configs = {
 
 class Config(object):
     default_config = {
-        "default_dropout_keep_prob": 0.75,
-
         "dtype": tf.float32,
         "hidden_units": [[64,]],
         "dynamic_seq": False,
@@ -247,12 +278,12 @@ def define_graph():
     RETURNS: input, labels, optimizer, accuracy and loss
     """
     # Select configurations
-    c = Config(l_configs["trial1"])
+    c = Config(l_configs["trial4"])
 
     # Define placeholders
     input_data = tf.placeholder(tf.float32,shape=[BATCH_SIZE,MAX_WORDS_IN_REVIEW,EMBEDDING_SIZE],name='input_data')
     labels = tf.placeholder(tf.float32, shape = [BATCH_SIZE,NUM_CLASSES],name = 'labels')
-    dropout_keep_prob = tf.placeholder_with_default(c.default_dropout_keep_prob, shape=(), name='dropout_keep_prob')
+    dropout_keep_prob = tf.placeholder_with_default(1.0, shape=(), name='dropout_keep_prob')
 
     # Define multiple independent graphs
     l_logits = []

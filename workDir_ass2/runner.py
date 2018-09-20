@@ -21,11 +21,13 @@ If you're using an IDE like pycharm, you can this as a default CLI arg in the ru
 import numpy as np
 import tensorflow as tf
 from random import randint
+import random
 import datetime
 import os
 from pathlib import Path
 import pickle as pk
 import glob
+import matplotlib.pyplot as plt
 
 import implementation as imp
 
@@ -33,13 +35,16 @@ BATCH_SIZE = imp.BATCH_SIZE
 MAX_WORDS_IN_REVIEW = imp.MAX_WORDS_IN_REVIEW  # Maximum length of a review to consider
 EMBEDDING_SIZE = imp.EMBEDDING_SIZE  # Dimensions for each word vector
 
-SAVE_FREQ = 100
+SAVE_FREQ = 500
 iterations = 10000
 
 checkpoints_dir = "./checkpoints"
 
+init_path = "/floyd/input/moviecomments"
+validate_path = "/data/validate"
 
-def load_data(path='/floyd/input/moviecomments/data/train'):
+
+def load_data(path = (init_path +'/data/train')):
     """
     Load raw reviews from text files, and apply preprocessing
     Append positive reviews first, and negative reviews second
@@ -81,7 +86,7 @@ def load_glove_embeddings():
     else:
         # create the embeddings
         print("Building embeddings dictionary...")
-        data = open("/floyd/input/moviecomments/glove.6B.50d.txt", 'r', encoding="utf-8")
+        data = open(init_path + "/glove.6B.50d.txt", 'r', encoding="utf-8")
         embeddings = [[0] * EMBEDDING_SIZE]
         word_index_dict = {'UNK': 0}  # first row is for unknown words
         index = 1
@@ -138,20 +143,32 @@ def train():
             else:
                 num = randint(12500, 24999)
                 labels.append([0, 1])
-            arr[i] = training_data_embedded[num, :, :]
+            arr[i] = train_data_embedded[num, :, :]
         return arr, labels
+
+    def getValidateChoices():
+        num_batches = len(validate_data_embedded) // BATCH_SIZE
+        choices_pos = random.choices(range(len(validate_data_embedded)//2), k=(num_batches*BATCH_SIZE)//2)
+        choices_neg = random.choices(range(len(validate_data_embedded)//2, len(validate_data_embedded)), k=(num_batches*BATCH_SIZE)//2)
+        choices = choices_pos + choices_neg
+        return num_batches, choices
 
     # Call implementation
     glove_array, glove_dict = load_glove_embeddings()
 
-    training_data_text = load_data()
-    training_data_embedded = embedd_data(training_data_text, glove_array, glove_dict)
+    train_data_text = load_data()
+    train_data_embedded = embedd_data(train_data_text, glove_array, glove_dict)
+
+    # validate
+    validate_data_text = load_data(init_path + validate_path)
+    validate_data_embedded = embedd_data(validate_data_text, glove_array, glove_dict)
+
     input_data, labels, dropout_keep_prob, optimizer, accuracy, loss = \
         imp.define_graph()
 
     # tensorboard
     tf.summary.scalar("training_accuracy", accuracy)
-    tf.summary.scalar("loss", loss)
+    tf.summary.scalar("training_loss", loss)
     summary_op = tf.summary.merge_all()
 
     # saver
@@ -164,17 +181,43 @@ def train():
         "%Y%m%d-%H%M%S") + "/"
     writer = tf.summary.FileWriter(logdir, sess.graph)
 
+    hist_train_loss = []
+    hist_train_acc = []
+    hist_validate_loss = []
+    hist_validate_acc = []
     for i in range(iterations):
-        batch_data, batch_labels = getTrainBatch()
-        sess.run(optimizer, {input_data: batch_data, labels: batch_labels,
+        train_batch, train_labels = getTrainBatch()
+        sess.run(optimizer, {input_data: train_batch, labels: train_labels,
                              dropout_keep_prob: 0.6})
         if (i % 50 == 0):
-            loss_value, accuracy_value, summary = sess.run(
+
+            train_loss_value, train_acc_value, summary = sess.run(
                 [loss, accuracy, summary_op],
-                {input_data: batch_data,
-                 labels: batch_labels})
+                {input_data: train_batch,
+                 labels: train_labels})
             writer.add_summary(summary, i)
-            print("Iteration: {0}, loss: {1}, acc: {2}".format(i,loss_value, accuracy_value))
+            hist_train_loss.append(train_loss_value)
+            hist_train_acc.append(train_acc_value)
+
+
+            num_validate_batches, validate_choices = getValidateChoices()
+            validate_labels = [[1,0]]*((BATCH_SIZE*num_validate_batches)//2) + [[0,1]]*((BATCH_SIZE*num_validate_batches)//2)
+
+            avg_validate_loss_value = avg_validate_acc_value = 0
+            for i_v in range(num_validate_batches):
+                validate_loss_value, validate_acc_value = sess.run(
+                    [loss, accuracy],
+                    {input_data: validate_data_embedded[validate_choices[i_v*BATCH_SIZE:(i_v+1)*BATCH_SIZE]],
+                     labels: validate_labels[i_v*BATCH_SIZE:(i_v+1)*BATCH_SIZE]})
+
+                avg_validate_loss_value = (avg_validate_loss_value*i_v+validate_loss_value)/(i_v+1)
+                avg_validate_acc_value = (avg_validate_acc_value*i_v+validate_acc_value)/(i_v+1)
+            hist_validate_loss.append(avg_validate_loss_value)
+            hist_validate_acc.append(avg_validate_acc_value)
+
+            print("Iteration %d:\nt_loss:%.4f\tt_acc:%.4f\nv_loss:%.4f\tv_acc:%.4f" % (i, train_loss_value, train_acc_value, avg_validate_loss_value, avg_validate_acc_value))
+
+
         if (i % SAVE_FREQ == 0 and i != 0):
             if not os.path.exists(checkpoints_dir):
                 os.makedirs(checkpoints_dir)
@@ -184,6 +227,30 @@ def train():
 
             print("Saved model to %s" % save_path)
     sess.close()
+
+    # Write to csv
+    ite = np.arange(0,iterations,50)
+    hist = np.concatenate((ite,np.array(hist_train_loss), np.array(hist_train_acc), np.array(hist_validate_loss), np.array(hist_validate_acc)))
+    hist = np.reshape(hist,[4,len(ite)])
+    hist = np.transpose(hist)
+    np.savetxt("./hist.csv", hist, fmt='%.4f', delimiter=',', header=" Iteration,  Training Loss,  Training Acc,  Validation Loss, Validation Acc")
+
+    # Plot graph
+    """
+    plt.figure()
+    ite = np.arange(0,iterations,50)
+    plt.title('Accruacy (Training and Validation sets)')
+    plt.xlabel('Iteration')
+    plt.ylabel('Accuracy')
+    plt.plot(ite,np.array(hist_train_acc),label="Training Acc", color="red")
+    plt.plot(ite,np.array(hist_validate_acc),label="Validation Acc", color="blue")
+    plt.grid()
+    plt.show()
+    """
+
+
+
+
 
 
 def eval(data_path):
@@ -236,7 +303,7 @@ if __name__ == "__main__":
         train()
     elif (args.mode == "eval"):
         print("Evaluation run")
-        eval("/floyd/input/moviecomments/data/validate")
+        eval(init_path + "/data/validate")
     elif (args.mode == "test"):
         print("Test run")
-        eval("/floyd/input/moviecomments/data/test")
+        eval(init_path + "/data/test")
