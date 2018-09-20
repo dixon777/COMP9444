@@ -39,7 +39,7 @@ iterations = 100000
 checkpoints_dir = "./checkpoints"
 
 
-def load_data(path='./data/train'):
+def load_data(path='/floyd/input/moviecomments/data/train'):
     """
     Load raw reviews from text files, and apply preprocessing
     Append positive reviews first, and negative reviews second
@@ -81,7 +81,7 @@ def load_glove_embeddings():
     else:
         # create the embeddings
         print("Building embeddings dictionary...")
-        data = open("glove.6B.50d.txt", 'r', encoding="utf-8")
+        data = open("/floyd/input/moviecomments/glove.6B.50d.txt", 'r', encoding="utf-8")
         embeddings = [[0] * EMBEDDING_SIZE]
         word_index_dict = {'UNK': 0}  # first row is for unknown words
         index = 1
@@ -95,7 +95,7 @@ def load_glove_embeddings():
         data.close()
 
         # pickle them
-        with open('./embeddings.pkl', 'wb') as f:
+        with open('embeddings.pkl', 'wb') as f:
             print("Creating local embeddings pickle for faster loading...")
             # Pickle the 'data' dictionary using the highest protocol available.
             pk.dump((embeddings, word_index_dict), f, pk.HIGHEST_PROTOCOL)
@@ -128,7 +128,7 @@ def embedd_data(training_data_text, e_arr, e_dict):
 
 
 def train():
-    def getTrainBatch(training_data_embedded):
+    def getTrainBatch():
         labels = []
         arr = np.zeros([BATCH_SIZE, MAX_WORDS_IN_REVIEW, EMBEDDING_SIZE])
         for i in range(BATCH_SIZE):
@@ -165,7 +165,7 @@ def train():
     writer = tf.summary.FileWriter(logdir, sess.graph)
 
     for i in range(iterations):
-        batch_data, batch_labels = getTrainBatch(training_data_embedded)
+        batch_data, batch_labels = getTrainBatch()
         sess.run(optimizer, {input_data: batch_data, labels: batch_labels,
                              dropout_keep_prob: 0.6})
         if (i % 50 == 0):
@@ -174,15 +174,14 @@ def train():
                 {input_data: batch_data,
                  labels: batch_labels})
             writer.add_summary(summary, i)
-            print("Iteration: ", i)
-            print("loss", loss_value)
-            print("acc", accuracy_value)
+            print("Iteration: {0}, loss: {1}, acc: {2}".format(i,loss_value, accuracy_value))
         if (i % SAVE_FREQ == 0 and i != 0):
             if not os.path.exists(checkpoints_dir):
                 os.makedirs(checkpoints_dir)
             save_path = all_saver.save(sess, checkpoints_dir +
                                        "/trained_model.ckpt",
                                        global_step=i)
+
             print("Saved model to %s" % save_path)
     sess.close()
 
@@ -237,7 +236,7 @@ if __name__ == "__main__":
         train()
     elif (args.mode == "eval"):
         print("Evaluation run")
-        eval("./data/validate")
+        eval("/floyd/input/moviecomments/data/validate")
     elif (args.mode == "test"):
         print("Test run")
-        eval("./data/test")
+        eval("/floyd/input/moviecomments/data/test")
