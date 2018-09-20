@@ -34,7 +34,7 @@ MAX_WORDS_IN_REVIEW = imp.MAX_WORDS_IN_REVIEW  # Maximum length of a review to c
 EMBEDDING_SIZE = imp.EMBEDDING_SIZE  # Dimensions for each word vector
 
 SAVE_FREQ = 100
-iterations = 100000
+iterations = 10000
 
 checkpoints_dir = "./checkpoints"
 

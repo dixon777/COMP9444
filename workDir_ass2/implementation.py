@@ -166,6 +166,7 @@ def define_graph():
 """
 
 l_configs = {
+    # validate acc: 0.82 (ite:8000)
     "safe": {
         "dtype": tf.float32,
         "learning_rate": 0.1,
@@ -177,31 +178,43 @@ l_configs = {
         "optimizer": tf.train.AdamOptimizer,
         "dynamic_seq": False
     },
-    "trial": {
-        "hidden_units": [100,64],
+
+    "trial1": {
+        "hidden_units": [[128,128]],
+        "extra_dense_activation": tf.nn.sigmoid,
     },
+
+    # validate acc: 0.81875 (ite:8000)
     "ensemble1": {
         "hidden_units": [[128],[64,64]],
-        "extra_connected_units": [32,],
+        "extra_dense_units": [[32,]],
     },
     "ensemble2": {
-        "hidden_units": [[128],[100,64], [64,100]],
-        "extra_connected_units": [32,],
+        "hidden_units": [[128,128],[64,100], [100]],
+        "extra_dense_units": [[128,], [128,], [64,]],
+        "extra_dense_activation": tf.nn.sigmoid,
     }
 }
 
 class Config(object):
     default_config = {
-        "dtype": tf.float32,
-        "learning_rate": 0.1,
-        "hidden_units": 64,
-        "extra_connected_units": [],
-        "extra_connected_activation": tf.nn.relu,
         "default_dropout_keep_prob": 0.75,
+
+        "dtype": tf.float32,
+        "hidden_units": [[64,]],
+        "dynamic_seq": False,
         "rnn_cell": tf.contrib.rnn.LSTMCell,
         "rnn_cell_initializer": tf.orthogonal_initializer,
+
+        "extra_dense_units": [[]],
+        "extra_dense_activation": tf.nn.relu,
+        "extra_dense_dropout_keep_prob": 1.0,
+        "extra_dense_weights_initializer": tf.truncated_normal_initializer,
+        "extra_dense_bias_initializer": tf.zeros_initializer,
+
+        "learning_rate": 0.1,
         "optimizer": tf.train.AdamOptimizer,
-        "dynamic_seq": False
+
     }
 
     def __init__(self, input):
@@ -234,7 +247,7 @@ def define_graph():
     RETURNS: input, labels, optimizer, accuracy and loss
     """
     # Select configurations
-    c = Config(l_configs["ensemble2"])
+    c = Config(l_configs["trial1"])
 
     # Define placeholders
     input_data = tf.placeholder(tf.float32,shape=[BATCH_SIZE,MAX_WORDS_IN_REVIEW,EMBEDDING_SIZE],name='input_data')
@@ -245,21 +258,33 @@ def define_graph():
     l_logits = []
     for i in range(len(c.hidden_units)):
         with tf.variable_scope("RNN{0}".format(i)):
+            # Create cell
             if len(c.hidden_units[i]) == 1:
                 cell = create_cell(c, c.hidden_units[i][0], dropout_keep_prob)
             else:
                 cell = tf.contrib.rnn.MultiRNNCell([create_cell(c,n,dropout_keep_prob) for n in c.hidden_units[i]])
 
             seq_len = get_seq_len(input_data) if c.dynamic_seq else None
+
+            # Construct graph
             outputs, _ = tf.nn.dynamic_rnn(cell=cell, inputs=input_data, sequence_length=seq_len, dtype=c.dtype)
 
+            # Extract last output
             last_output = outputs[:,-1,:]
-            for t in c.extra_connected_units:
-                last_output = tf.layers.dense(last_output, t, activation=tf.nn.relu)
+
+            # Create extra feedforward layers if necessary
+            for cu in c.extra_dense_units[i]:
+                last_output = tf.layers.dense(last_output, cu,
+                                              activation=c.extra_dense_activation,
+                                              kernel_initializer=c.extra_dense_weights_initializer(),
+                                              bias_initializer = c.extra_dense_bias_initializer())
+                last_output = tf.contrib.layers.dropout(last_output, c.extra_dense_dropout_keep_prob)
+
+            # Compute prediction linearly
             i_logits = tf.layers.dense(last_output, NUM_CLASSES)
         l_logits.append(i_logits)
 
-    # Merge
+    # Merge logits
     total = l_logits[0]
     for i in range(len(l_logits)-1):
         total = tf.add(total, l_logits[i+1])
